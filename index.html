@@ -3,18 +3,19 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
-<title>위치 마커 & 메모 — PWA v7 (맛집마킹 + 중심검색)</title>
+<title>위치 마커 & 메모 — PWA v8 (하단 툴바 + 빨간 마커)</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
 <style>
-:root { --header-h: 56px; --panel-h: 40vh; }
+:root { --header-h: 44px; --panel-h: 40vh; --toolbar-h: 62px; }
 html,body { height: 100%; margin: 0; padding: 0; }
 body { font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Arial, sans-serif; }
-header { position: fixed; top: 0; left: 0; right: 0; background: #1e90ff; color: #fff; display:flex; flex-wrap:wrap; align-items:center; gap:6px; padding:6px; z-index:1000; }
-header strong { font-size:16px; white-space:nowrap; margin-right:6px; }
-header button { padding:8px 10px; font-size:14px; border-radius:8px; border:0; }
-#map { position:absolute; top: var(--header-h); left:0; right:0; bottom: 0; transition: bottom .2s ease; }
-#resultsPanel.open ~ #map { bottom: var(--panel-h); }
-#resultsPanel { position: fixed; left:0; right:0; bottom:0; height: var(--panel-h); background:#fff; border-top-left-radius:14px; border-top-right-radius:14px; box-shadow: 0 -8px 24px rgba(0,0,0,.25); z-index:1100; transform: translateY(calc(100% - 44px)); transition: transform .25s ease; touch-action: none; }
+/* 상단바: 제목만 */
+header { position: fixed; top: 0; left: 0; right: 0; height: var(--header-h); background: #1e90ff; color: #fff; display:flex; align-items:center; padding:0 10px; z-index:1000; }
+header strong { font-size:16px; }
+/* 지도 영역: 하단 툴바 높이만큼 여유 */
+#map { position:absolute; top: var(--header-h); left:0; right:0; bottom: var(--toolbar-h); transition: bottom .2s ease; }
+/* 하단 드로어 패널 */
+#resultsPanel { position: fixed; left:0; right:0; bottom: var(--toolbar-h); height: var(--panel-h); background:#fff; border-top-left-radius:14px; border-top-right-radius:14px; box-shadow: 0 -8px 24px rgba(0,0,0,.25); z-index:1100; transform: translateY(calc(100% - 44px)); transition: transform .25s ease; touch-action: none; }
 #resultsPanel.open { transform: translateY(0); }
 .drag-handle { width:100%; height:20px; cursor:grab; display:flex; justify-content:center; align-items:center; }
 .drag-bar { width:40px; height:4px; background:#ccc; border-radius:2px; }
@@ -27,36 +28,55 @@ header button { padding:8px 10px; font-size:14px; border-radius:8px; border:0; }
 .item b { display:block; margin-bottom:4px; }
 .meta { font-size:12px; color:#666; }
 .actions { margin-top:6px; display:flex; gap:6px; flex-wrap:wrap; }
+/* 하단 툴바 */
+#bottomBar { position: fixed; left:0; right:0; bottom:0; height: var(--toolbar-h); background:#fff; border-top:1px solid #eaeaea; display:flex; justify-content:space-around; align-items:center; z-index:1200; }
+.bar-btn { display:flex; flex-direction:column; align-items:center; gap:4px; font-size:12px; border:0; background:transparent; padding:6px 8px; }
+.bar-btn .ico { font-size:20px; line-height:1; }
+.bar-btn:active { transform: translateY(1px); }
+/* 커스텀 마커 (사용자 마커 = 빨간색, 작게) */
+.leaflet-marker-icon.user-marker { width:12px !important; height:12px !important; background:#e53935; border:2px solid #fff; border-radius:50%; box-shadow:0 0 0 2px rgba(229,57,53,.25); }
+/* 검색 결과 마커(작은 회색 점) */
+.leaflet-marker-icon.place-marker { width:10px !important; height:10px !important; background:#616161; border:2px solid #fff; border-radius:50%; opacity:.9; }
 @media (max-width: 420px){ :root{ --panel-h: 50vh; } }
 </style>
 </head>
 <body>
 <header>
-<strong>위치 마커 & 메모</strong>
-<button id="locBtn">현재 위치</button>
-<button id="addCenterBtn">중심 마커</button>
-<button id="togglePanelBtn">맛집 리스트</button>
-<button id="searchCenterBtn">중심에서 검색</button>
+  <strong>위치 마커 & 메모</strong>
 </header>
 <div id="map"></div>
+
+<!-- 하단 툴바 -->
+<nav id="bottomBar" aria-label="하단 도구막대">
+  <button id="tbLoc" class="bar-btn" title="현재 위치"><span class="ico">📍</span><span>현재</span></button>
+  <button id="tbAdd" class="bar-btn" title="중심에 마커"><span class="ico">＋</span><span>마커</span></button>
+  <button id="tbList" class="bar-btn" title="맛집 리스트"><span class="ico">🍽️</span><span>리스트</span></button>
+  <button id="tbSearch" class="bar-btn" title="중심에서 검색"><span class="ico">🔎</span><span>검색</span></button>
+</nav>
+
 <section id="resultsPanel">
-<div class="drag-handle"><div class="drag-bar"></div></div>
-<div class="rp-head">
-<div class="rp-title"><strong>주변 맛집</strong><span id="where" class="pill"></span></div>
-<div><button id="refreshBtn" class="pill">새로고침</button></div>
-</div>
-<div class="rp-body"><div id="list" class="list"></div></div>
+  <div class="drag-handle"><div class="drag-bar"></div></div>
+  <div class="rp-head">
+    <div class="rp-title"><strong>주변 맛집</strong><span id="where" class="pill"></span></div>
+    <div><button id="refreshBtn" class="pill">새로고침</button></div>
+  </div>
+  <div class="rp-body"><div id="list" class="list"></div></div>
 </section>
+
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 let map, markersLayer, placesLayer, markers={};
-const STORAGE_KEY='marker-memo-v7';
+const STORAGE_KEY='marker-memo-v8';
 function uid(){ return 'm'+Date.now().toString(36)+Math.random().toString(36).slice(2,8); }
 function save(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(Object.values(markers))); }
 function load(){ try{ (JSON.parse(localStorage.getItem(STORAGE_KEY)||'[]')).forEach(m=>markers[m.id]=m); }catch(e){} }
 function getCurrentPositionOnce(){ return new Promise((res,rej)=>{ navigator.geolocation.getCurrentPosition(res,rej,{enableHighAccuracy:true}); }); }
-function osmSearch(lat,lng){ return fetch(`https://nominatim.openstreetmap.org/search?format=json&q=restaurant&bounded=1&limit=10&viewbox=${lng-0.02},${lat+0.02},${lng+0.02},${lat-0.02}`);
-}
+function osmSearch(lat,lng){ return fetch(`https://nominatim.openstreetmap.org/search?format=json&q=restaurant&bounded=1&limit=12&viewbox=${lng-0.02},${lat+0.02},${lng+0.02},${lat-0.02}`); }
+
+// 커스텀 아이콘 (빨간 사용자 마커 / 회색 결과 마커)
+const userDivIcon = L.divIcon({ className:'user-marker', iconSize:[12,12], iconAnchor:[6,6] });
+const placeDivIcon = L.divIcon({ className:'place-marker', iconSize:[10,10], iconAnchor:[5,5] });
+
 function popupHtml(m){
   const safe=(m.note||'').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   return `<div><textarea id="ta-${m.id}" style="width:100%;height:60px;">${safe}</textarea><div style="margin-top:4px;text-align:right;"><button onclick="saveNote('${m.id}')">저장</button><button onclick="delMarker('${m.id}')">삭제</button></div></div>`;
@@ -64,31 +84,45 @@ function popupHtml(m){
 function saveNote(id){ markers[id].note=document.getElementById('ta-'+id).value; save(); renderMarkers(); }
 function delMarker(id){ delete markers[id]; save(); renderMarkers(); }
 function addMarker(lat,lng,note=''){ const id=uid(); markers[id]={id,lat,lng,note}; save(); renderMarkers(); }
-function renderMarkers(){ markersLayer.clearLayers(); Object.values(markers).forEach(m=>{ const mk=L.marker([m.lat,m.lng]).addTo(markersLayer); mk.bindPopup(popupHtml(m)); }); }
-function renderPlaces(data){ placesLayer.clearLayers(); data.forEach(d=>{ const lat=+d.lat, lng=+d.lon; const mk=L.marker([lat,lng], {opacity:0.7}).addTo(placesLayer); mk.bindTooltip(d.display_name.split(',')[0], {permanent:true, direction:'right'}); }); }
-async function renderList(lat=null,lng=null){ if(!lat||!lng){ const p=await getCurrentPositionOnce().catch(()=>({coords:{latitude:37.5665,longitude:126.9780}})); lat=p.coords.latitude; lng=p.coords.longitude; }
- document.getElementById('where').textContent=`${lat.toFixed(5)},${lng.toFixed(5)}`;
+function renderMarkers(){ markersLayer.clearLayers(); Object.values(markers).forEach(m=>{ const mk=L.marker([m.lat,m.lng],{icon:userDivIcon}).addTo(markersLayer); mk.bindPopup(popupHtml(m)); }); }
+function renderPlaces(data){ placesLayer.clearLayers(); data.forEach(d=>{ const lat=+d.lat, lng=+d.lon; const mk=L.marker([lat,lng], {icon:placeDivIcon}).addTo(placesLayer); mk.bindTooltip(d.display_name.split(',')[0], {permanent:true, direction:'right', offset:[8,0]}); }); }
+async function renderList(lat=null,lng=null){ if(lat==null||lng==null){ const p=await getCurrentPositionOnce().catch(()=>({coords:{latitude:37.5665,longitude:126.9780}})); lat=p.coords.latitude; lng=p.coords.longitude; }
+ document.getElementById('where').textContent=`${lat.toFixed(5)}, ${lng.toFixed(5)}`;
  const res=await osmSearch(lat,lng); const data=await res.json();
  renderPlaces(data);
  const list=document.getElementById('list');
- list.innerHTML=data.map(d=>`<div class='item'><b>${d.display_name.split(',')[0]}</b><div class='meta'>${(+d.lat).toFixed(5)}, ${( +d.lon).toFixed(5)}</div><div class='actions'><a class='pill' target='_blank' href='https://www.google.com/maps/search/?api=1&query=${d.lat},${d.lon}'>지도 열기</a></div></div>`).join('');
+ list.innerHTML=data.map(d=>`<div class='item'>
+   <b>${d.display_name.split(',')[0]}</b>
+   <div class='meta'>${(+d.lat).toFixed(5)}, ${( +d.lon).toFixed(5)}</div>
+   <div class='actions'>
+     <button class='pill' data-pan='${d.lat},${d.lon}'>지도로 이동</button>
+     <a class='pill' target='_blank' href='https://www.google.com/maps/search/?api=1&query=${d.lat},${d.lon}'>구글지도</a>
+   </div>
+ </div>`).join('');
+ // 리스트 -> 지도 이동
+ list.querySelectorAll('button[data-pan]').forEach(b=> b.onclick=()=>{ const [la,lo]=b.dataset.pan.split(',').map(Number); map.setView([la,lo], Math.max(map.getZoom(),16)); });
 }
+
 window.addEventListener('load',()=>{
- map=L.map('map').setView([37.5665,126.9780],13);
- L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
- markersLayer=L.layerGroup().addTo(map);
- placesLayer=L.layerGroup().addTo(map);
- load(); renderMarkers();
- map.on('click',e=>{ const note=prompt('메모를 입력하세요:',''); if(note!==null) addMarker(e.latlng.lat,e.latlng.lng,note); });
- document.getElementById('locBtn').onclick=async()=>{ const p=await getCurrentPositionOnce(); map.setView([p.coords.latitude,p.coords.longitude],16); };
- document.getElementById('addCenterBtn').onclick=()=>{ const c=map.getCenter(); const note=prompt('메모를 입력하세요:',''); if(note!==null) addMarker(c.lat,c.lng,note); };
- document.getElementById('togglePanelBtn').onclick=()=>{ document.getElementById('resultsPanel').classList.toggle('open'); const c=map.getCenter(); renderList(c.lat,c.lng); };
- document.getElementById('refreshBtn').onclick=()=>{ const c=map.getCenter(); renderList(c.lat,c.lng); };
- document.getElementById('searchCenterBtn').onclick=()=>{ const c=map.getCenter(); renderList(c.lat,c.lng); };
- // 드래그 기능
- const panel=document.getElementById('resultsPanel'); let startY,startH;
- panel.querySelector('.drag-handle').addEventListener('touchstart',e=>{ startY=e.touches[0].clientY; startH=panel.getBoundingClientRect().height; },{passive:true});
- panel.querySelector('.drag-handle').addEventListener('touchmove',e=>{ const dy=startY-e.touches[0].clientY; let newH=startH+dy; if(newH<100)newH=100; if(newH>window.innerHeight)newH=window.innerHeight; panel.style.height=newH+'px'; });
+  map=L.map('map').setView([37.5665,126.9780],13);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
+  markersLayer=L.layerGroup().addTo(map);
+  placesLayer=L.layerGroup().addTo(map);
+  load(); renderMarkers();
+
+  map.on('click',e=>{ const note=prompt('메모를 입력하세요:',''); if(note!==null) addMarker(e.latlng.lat,e.latlng.lng,note); });
+
+  // 하단 툴바 동작
+  document.getElementById('tbLoc').onclick=async()=>{ const p=await getCurrentPositionOnce().catch(()=>null); if(!p) return alert('현재 위치를 가져오지 못했습니다.'); map.setView([p.coords.latitude,p.coords.longitude],16); };
+  document.getElementById('tbAdd').onclick=()=>{ const c=map.getCenter(); const note=prompt('지도 중심에 마커 메모 입력:',''); if(note!==null) addMarker(c.lat,c.lng,note); };
+  document.getElementById('tbList').onclick=()=>{ document.getElementById('resultsPanel').classList.toggle('open'); const c=map.getCenter(); renderList(c.lat,c.lng); };
+  document.getElementById('tbSearch').onclick=()=>{ const c=map.getCenter(); renderList(c.lat,c.lng); };
+
+  // 드래그(스와이프)로 패널 높이 조절
+  const panel=document.getElementById('resultsPanel'); let startY,startH;
+  const handle=panel.querySelector('.drag-handle');
+  handle.addEventListener('touchstart',e=>{ startY=e.touches[0].clientY; startH=panel.getBoundingClientRect().height; },{passive:true});
+  handle.addEventListener('touchmove',e=>{ const dy=startY-e.touches[0].clientY; let newH=startH+dy; newH=Math.min(Math.max(newH,100), window.innerHeight-80); panel.style.height=newH+'px'; },{passive:true});
 });
 </script>
 </body>
