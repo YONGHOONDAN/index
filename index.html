@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
-<title>위치 마커 & 메모 — PWA v5 (드래그 + API검색)</title>
+<title>위치 마커 & 메모 — PWA v7 (맛집마킹 + 중심검색)</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
 <style>
 :root { --header-h: 56px; --panel-h: 40vh; }
@@ -36,6 +36,7 @@ header button { padding:8px 10px; font-size:14px; border-radius:8px; border:0; }
 <button id="locBtn">현재 위치</button>
 <button id="addCenterBtn">중심 마커</button>
 <button id="togglePanelBtn">맛집 리스트</button>
+<button id="searchCenterBtn">중심에서 검색</button>
 </header>
 <div id="map"></div>
 <section id="resultsPanel">
@@ -48,26 +49,46 @@ header button { padding:8px 10px; font-size:14px; border-radius:8px; border:0; }
 </section>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-let map, markersLayer;
+let map, markersLayer, placesLayer, markers={};
+const STORAGE_KEY='marker-memo-v7';
+function uid(){ return 'm'+Date.now().toString(36)+Math.random().toString(36).slice(2,8); }
+function save(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(Object.values(markers))); }
+function load(){ try{ (JSON.parse(localStorage.getItem(STORAGE_KEY)||'[]')).forEach(m=>markers[m.id]=m); }catch(e){} }
 function getCurrentPositionOnce(){ return new Promise((res,rej)=>{ navigator.geolocation.getCurrentPosition(res,rej,{enableHighAccuracy:true}); }); }
-function gmapsSearch(lat,lng){ return fetch(`https://nominatim.openstreetmap.org/search?format=json&q=restaurant&bounded=1&limit=10&viewbox=${lng-0.02},${lat+0.02},${lng+0.02},${lat-0.02}`);
+function osmSearch(lat,lng){ return fetch(`https://nominatim.openstreetmap.org/search?format=json&q=restaurant&bounded=1&limit=10&viewbox=${lng-0.02},${lat+0.02},${lng+0.02},${lat-0.02}`);
 }
-async function renderList(){ const p=await getCurrentPositionOnce().catch(()=>({coords:{latitude:37.5665,longitude:126.9780}})); const lat=p.coords.latitude,lng=p.coords.longitude; document.getElementById('where').textContent=`${lat.toFixed(5)},${lng.toFixed(5)}`;
-const res=await gmapsSearch(lat,lng); const data=await res.json(); const list=document.getElementById('list');
-list.innerHTML=data.map(d=>`<div class='item'><b>${d.display_name.split(',')[0]}</b><div class='meta'>${(d.lat*1).toFixed(5)}, ${(d.lon*1).toFixed(5)}</div><div class='actions'><a class='pill' target='_blank' href='https://www.google.com/maps/search/?api=1&query=${d.lat},${d.lon}'>지도 열기</a></div></div>`).join('');
+function popupHtml(m){
+  const safe=(m.note||'').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return `<div><textarea id="ta-${m.id}" style="width:100%;height:60px;">${safe}</textarea><div style="margin-top:4px;text-align:right;"><button onclick="saveNote('${m.id}')">저장</button><button onclick="delMarker('${m.id}')">삭제</button></div></div>`;
+}
+function saveNote(id){ markers[id].note=document.getElementById('ta-'+id).value; save(); renderMarkers(); }
+function delMarker(id){ delete markers[id]; save(); renderMarkers(); }
+function addMarker(lat,lng,note=''){ const id=uid(); markers[id]={id,lat,lng,note}; save(); renderMarkers(); }
+function renderMarkers(){ markersLayer.clearLayers(); Object.values(markers).forEach(m=>{ const mk=L.marker([m.lat,m.lng]).addTo(markersLayer); mk.bindPopup(popupHtml(m)); }); }
+function renderPlaces(data){ placesLayer.clearLayers(); data.forEach(d=>{ const lat=+d.lat, lng=+d.lon; const mk=L.marker([lat,lng], {opacity:0.7}).addTo(placesLayer); mk.bindTooltip(d.display_name.split(',')[0], {permanent:true, direction:'right'}); }); }
+async function renderList(lat=null,lng=null){ if(!lat||!lng){ const p=await getCurrentPositionOnce().catch(()=>({coords:{latitude:37.5665,longitude:126.9780}})); lat=p.coords.latitude; lng=p.coords.longitude; }
+ document.getElementById('where').textContent=`${lat.toFixed(5)},${lng.toFixed(5)}`;
+ const res=await osmSearch(lat,lng); const data=await res.json();
+ renderPlaces(data);
+ const list=document.getElementById('list');
+ list.innerHTML=data.map(d=>`<div class='item'><b>${d.display_name.split(',')[0]}</b><div class='meta'>${(+d.lat).toFixed(5)}, ${( +d.lon).toFixed(5)}</div><div class='actions'><a class='pill' target='_blank' href='https://www.google.com/maps/search/?api=1&query=${d.lat},${d.lon}'>지도 열기</a></div></div>`).join('');
 }
 window.addEventListener('load',()=>{
-map=L.map('map').setView([37.5665,126.9780],13);
-L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
-markersLayer=L.layerGroup().addTo(map);
-document.getElementById('locBtn').onclick=async()=>{ const p=await getCurrentPositionOnce(); map.setView([p.coords.latitude,p.coords.longitude],16); };
-document.getElementById('addCenterBtn').onclick=()=>{ const c=map.getCenter(); L.marker([c.lat,c.lng]).addTo(markersLayer); };
-document.getElementById('togglePanelBtn').onclick=()=>{ document.getElementById('resultsPanel').classList.toggle('open'); renderList(); };
-document.getElementById('refreshBtn').onclick=renderList;
-// 드래그 기능
-const panel=document.getElementById('resultsPanel'); let startY,startH;
-panel.querySelector('.drag-handle').addEventListener('touchstart',e=>{ startY=e.touches[0].clientY; startH=panel.getBoundingClientRect().height; },{passive:true});
-panel.querySelector('.drag-handle').addEventListener('touchmove',e=>{ const dy=startY-e.touches[0].clientY; let newH=startH+dy; if(newH<100)newH=100; if(newH>window.innerHeight)newH=window.innerHeight; panel.style.height=newH+'px'; });
+ map=L.map('map').setView([37.5665,126.9780],13);
+ L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
+ markersLayer=L.layerGroup().addTo(map);
+ placesLayer=L.layerGroup().addTo(map);
+ load(); renderMarkers();
+ map.on('click',e=>{ const note=prompt('메모를 입력하세요:',''); if(note!==null) addMarker(e.latlng.lat,e.latlng.lng,note); });
+ document.getElementById('locBtn').onclick=async()=>{ const p=await getCurrentPositionOnce(); map.setView([p.coords.latitude,p.coords.longitude],16); };
+ document.getElementById('addCenterBtn').onclick=()=>{ const c=map.getCenter(); const note=prompt('메모를 입력하세요:',''); if(note!==null) addMarker(c.lat,c.lng,note); };
+ document.getElementById('togglePanelBtn').onclick=()=>{ document.getElementById('resultsPanel').classList.toggle('open'); const c=map.getCenter(); renderList(c.lat,c.lng); };
+ document.getElementById('refreshBtn').onclick=()=>{ const c=map.getCenter(); renderList(c.lat,c.lng); };
+ document.getElementById('searchCenterBtn').onclick=()=>{ const c=map.getCenter(); renderList(c.lat,c.lng); };
+ // 드래그 기능
+ const panel=document.getElementById('resultsPanel'); let startY,startH;
+ panel.querySelector('.drag-handle').addEventListener('touchstart',e=>{ startY=e.touches[0].clientY; startH=panel.getBoundingClientRect().height; },{passive:true});
+ panel.querySelector('.drag-handle').addEventListener('touchmove',e=>{ const dy=startY-e.touches[0].clientY; let newH=startH+dy; if(newH<100)newH=100; if(newH>window.innerHeight)newH=window.innerHeight; panel.style.height=newH+'px'; });
 });
 </script>
 </body>
