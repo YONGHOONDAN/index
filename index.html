@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>위치 마커 & 메모 — PWA v3 (Single File)</title>
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="마커 & 메모" />
+  <meta name="theme-color" content="#1e90ff" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+  <style>
+    :root { --header-h: 52px; }
+    html,body { height: 100%; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Arial, sans-serif; }
+    header { position: fixed; top: 0; left: 0; right: 0; height: var(--header-h); background: #1e90ff; color: #fff; display:flex; align-items:center; gap:8px; padding: 6px 10px; z-index:1000; }
+    header button, header input[type="file"] { margin-left: 6px; padding:6px 8px; font-size:14px; }
+    #map { position: absolute; top: var(--header-h); bottom: 0; left:0; right:0; }
+    .control { background: white; padding:6px 8px; border-radius:4px; box-shadow:0 1px 4px rgba(0,0,0,0.2); font-size:14px; color:#000; }
+    #markerList { position: absolute; right: 8px; top: calc(var(--header-h) + 8px); width: 280px; max-height: 60vh; overflow:auto; background: rgba(255,255,255,0.95); padding:8px; border-radius:6px; z-index:1000; box-shadow:0 2px 8px rgba(0,0,0,0.2); }
+    .m-item { padding:6px; border-bottom:1px solid #eee; } .m-item small { color:#666; display:block; margin-top:4px; }
+    .btn-sm { padding:4px 6px; font-size:12px; margin-left:6px; }
+    textarea { width:100%; height:80px; font-family:inherit; }
+    #warn { position: fixed; bottom: 8px; left: 8px; right: 8px; background:#fff3cd; color:#664d03; border:1px solid #ffec99; border-radius:6px; padding:8px; display:none; z-index:1001; }
+    #warn b { display:inline-block; margin-right:6px; }
+  </style>
+</head>
+<body>
+  <header>
+    <strong>위치 마커 & 메모</strong>
+    <div class="control">
+      <button id="locBtn" title="현재 위치로 이동">현재 위치로 이동</button>
+      <button id="markHereBtn" title="현재 위치에 마커 추가">현재 위치에 마커</button>
+      <button id="addCenterBtn" title="지도 중심에 마커 추가">현재 중심에 마커</button>
+      <button id="exportBtn" title="마커 내보내기(JSON)">내보내기</button>
+      <input id="importFile" type="file" accept="application/json" title="JSON 파일로 가져오기">
+      <button id="clearBtn" title="모든 마커 삭제">모두 삭제</button>
+    </div>
+  </header>
+
+  <div id="map" aria-label="지도"></div>
+  <div id="markerList" style="display:none"></div>
+  <div id="warn"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script>
+  // ===== 공통 =====
+  const STORAGE_KEY = 'my_location_markers_v3_single';
+  let map, markersLayer; const markers = {};
+  const inIframe = (()=>{ try{ return window.self !== window.top; } catch(e){ return true; } })();
+  function isSecureContextLike(){ if (location.protocol==='https:') return true; if (location.hostname==='localhost'||location.hostname==='127.0.0.1') return true; return false; }
+  function showWarn(msg){ const w=document.getElementById('warn'); w.innerHTML=msg; w.style.display='block'; clearTimeout(showWarn._t); showWarn._t=setTimeout(()=>w.style.display='none', 7000);} 
+  function uid(){ return 'm'+Date.now().toString(36)+Math.random().toString(36).slice(2,8); }
+  function saveMarkers(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(Object.values(markers))); renderMarkerList(); }
+  function loadMarkers(){ try{ (JSON.parse(localStorage.getItem(STORAGE_KEY)||'[]')).forEach(m=>markers[m.id]=m);}catch(e){} }
+
+  // ===== UI =====
+  function buildPopup(m){ const created=new Date(m.created).toLocaleString(); const safe=(m.note||'').replace(/</g,'&lt;').replace(/>/g,'&gt;'); return `<div style="min-width:220px;"><div><small>생성: ${created}</small></div><textarea id="ta-${m.id}" placeholder="메모 입력...">${safe}</textarea><div style="text-align:right; margin-top:6px;"><button id="save-${m.id}" class="btn-sm">저장</button><button id="delete-${m.id}" class="btn-sm">삭제</button></div></div>`; }
+  function attachPopupEvents(id){ const s=document.getElementById('save-'+id), d=document.getElementById('delete-'+id), t=document.getElementById('ta-'+id); if(s) s.onclick=()=>{ markers[id].note=t.value; saveMarkers(); renderMapMarkers(); }; if(d) d.onclick=()=>{ if(confirm('삭제할까요?')){ delete markers[id]; saveMarkers(); renderMapMarkers(); renderMarkerList(); } }; }
+  function renderMarkerList(){ const el=document.getElementById('markerList'); const arr=Object.values(markers).sort((a,b)=>a.created-b.created); if(!arr.length){ el.style.display='none'; el.innerHTML=''; return; } el.style.display='block'; el.innerHTML='<strong>저장된 마커</strong><div style="height:8px"></div>'+arr.map(m=>{ const created=new Date(m.created).toLocaleString(); const short=(m.note||'').slice(0,80).replace(/</g,'&lt;').replace(/>/g,'&gt;')||'(메모 없음)'; return `<div class="m-item" data-id="${m.id}"><div><strong>${short}</strong></div><small>${created} — ${m.lat.toFixed(5)}, ${m.lng.toFixed(5)} <button class="btn-sm" data-action="pan" data-id="${m.id}">이동</button><button class="btn-sm" data-action="open" data-id="${m.id}">팝업</button><button class="btn-sm" data-action="del" data-id="${m.id}">삭제</button></small></div>`; }).join(''); el.querySelectorAll('button').forEach(b=>{ const id=b.dataset.id; b.onclick=()=>{ const m=markers[id]; if(!m) return; if(b.dataset.action==='pan') map.setView([m.lat,m.lng], Math.max(map.getZoom(),16)); if(b.dataset.action==='open') markersLayer.eachLayer(l=>{ if(l._markerId===id) l.openPopup(); }); if(b.dataset.action==='del'){ if(confirm('삭제하시겠어요?')){ delete markers[id]; saveMarkers(); renderMapMarkers(); renderMarkerList(); } } }; }); }
+  function addMarker({lat,lng,note=''}){ const id=uid(); markers[id]={id,lat,lng,note,created:Date.now()}; saveMarkers(); renderMapMarkers(); map.setView([lat,lng], Math.max(map.getZoom(),16)); setTimeout(()=>{ markersLayer.eachLayer(l=>{ if(l._markerId===id) l.openPopup(); }); }, 120); }
+  function renderMapMarkers(){ markersLayer.clearLayers(); Object.values(markers).forEach(m=>{ const mk=L.marker([m.lat,m.lng],{title:(m.note||'메모 없음').slice(0,30)}).addTo(markersLayer); mk._markerId=m.id; mk.bindPopup(buildPopup(m)); mk.on('popupopen',()=>attachPopupEvents(m.id)); }); }
+  function exportMarkers(){ const blob=new Blob([JSON.stringify(Object.values(markers), null, 2)],{type:'application/json'}); const url=URL.createObjectURL(blob); const a=Object.assign(document.createElement('a'),{href:url,download:'markers.json'}); document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url); }
+  function importMarkersFromFile(file){ const r=new FileReader(); r.onload=()=>{ try{ const arr=JSON.parse(r.result); if(!Array.isArray(arr)) throw new Error('JSON 배열 아님'); arr.forEach(m=>{ if(!m.id) m.id=uid(); markers[m.id]=m; }); saveMarkers(); renderMapMarkers(); renderMarkerList(); alert('가져오기 완료'); }catch(e){ alert('가져오기 실패: '+e.message); } }; r.readAsText(file); }
+  function getCurrentPositionOnce(){ return new Promise((res,rej)=>{ if(!('geolocation'in navigator)) return rej(new Error('이 브라우저는 위치 정보를 지원하지 않습니다.')); navigator.geolocation.getCurrentPosition(res,rej,{enableHighAccuracy:true,timeout:10000,maximumAge:0}); }); }
+
+  // ===== 초기화 =====
+  window.addEventListener('load', ()=>{
+    if (inIframe) { showWarn('<b>미리보기 환경</b>에서는 외부 리소스/위치 접근이 제한될 수 있어요. 실제 사용은 HTTPS에서 열어주세요.'); }
+    try{ map=L.map('map'); }catch(e){ alert('지도를 초기화하지 못했습니다. 콘솔을 확인하세요.'); console.error(e); return; }
+    map.setView([37.5665,126.9780], 13);
+
+    // 타일 서버 순환(fallback)
+    const tileUrls=['https://tile.openstreetmap.org/{z}/{x}/{y}.png','https://a.tile.openstreetmap.org/{z}/{x}/{y}.png','https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png'];
+    let tileIndex=0; let tileLayer; function useNextTileLayer(){ if(tileLayer){ try{ map.removeLayer(tileLayer);}catch(_){} } const url=tileUrls[tileIndex%tileUrls.length]; tileIndex++; tileLayer=L.tileLayer(url,{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}); tileLayer.on('tileerror',()=>{ showWarn('<b>지도 타일 로딩 실패</b> 다른 서버로 전환합니다.'); useNextTileLayer(); }); tileLayer.on('load',()=>{ const w=document.getElementById('warn'); if(w) w.style.display='none'; }); tileLayer.addTo(map);} useNextTileLayer();
+
+    markersLayer=L.layerGroup().addTo(map);
+    loadMarkers(); renderMapMarkers(); renderMarkerList();
+
+    map.on('click', e=>{ const text=prompt('이 위치에 마커를 추가합니다. 메모를 입력하세요:', ''); if(text===null) return; addMarker({lat:e.latlng.lat,lng:e.latlng.lng,note:text||''}); });
+
+    document.getElementById('locBtn').onclick=async()=>{ if(!isSecureContextLike()) showWarn('<b>알림</b> HTTPS나 localhost가 아니면 위치 접근이 차단될 수 있어요.'); try{ const pos=await getCurrentPositionOnce(); const {latitude:lat,longitude:lng}=pos.coords; map.setView([lat,lng],17); }catch(err){ alert('현재 위치를 가져오지 못했습니다: '+err.message); } };
+    document.getElementById('markHereBtn').onclick=async()=>{ if(!isSecureContextLike()) showWarn('<b>알림</b> HTTPS나 localhost가 아니면 위치 접근이 차단될 수 있어요.'); try{ const pos=await getCurrentPositionOnce(); const {latitude:lat,longitude:lng}=pos.coords; const note=prompt('현재 위치에 마커를 추가합니다. 메모를 입력하세요:', ''); if(note===null) return; addMarker({lat,lng,note:note||''}); }catch(err){ alert('현재 위치를 가져오지 못했습니다: '+err.message); } };
+    document.getElementById('addCenterBtn').onclick=()=>{ const c=map.getCenter(); const note=prompt('지도 중심에 마커를 추가합니다. 메모를 입력하세요:', ''); if(note===null) return; addMarker({lat:c.lat,lng:c.lng,note:note||''}); };
+    document.getElementById('exportBtn').onclick=exportMarkers;
+    document.getElementById('importFile').onchange=ev=>{ const f=ev.target.files[0]; if(!f) return; if(!confirm('파일의 마커를 현재 데이터와 병합합니다. 진행할까요?')){ ev.target.value=''; return; } importMarkersFromFile(f); ev.target.value=''; };
+    document.getElementById('clearBtn').onclick=()=>{ if(confirm('모든 마커를 삭제합니다. 복구 불가. 진행할까요?')){ for(const k in markers) delete markers[k]; saveMarkers(); renderMapMarkers(); renderMarkerList(); } };
+
+    if (location.protocol==='file:') { showWarn('<b>참고</b> 파일로 직접 열면 현재 위치 기능이 제한될 수 있습니다. 간단 서버에서 열어주세요. 예: <code>python -m http.server</code> 후 <code>http://localhost:8000</code> 접속'); }
+  });
+
+  // ===== PWA(동적 manifest + 서비스워커) =====
+  (function(){
+    function makeIcon(size){ const c=document.createElement('canvas'); c.width=c.height=size; const x=c.getContext('2d'); x.fillStyle='#1e90ff'; x.fillRect(0,0,size,size); x.fillStyle='#fff'; const r=size*0.18, cx=size*0.5, cy=size*0.45; x.beginPath(); x.arc(cx,cy,r,0,Math.PI*2); x.fill(); x.beginPath(); x.moveTo(cx, cy + r*0.9); x.lineTo(cx - r*0.6, cy + r*2.2); x.lineTo(cx + r*0.6, cy + r*2.2); x.closePath(); x.fill(); return c.toDataURL('image/png'); }
+    const icon512=makeIcon(512), icon192=makeIcon(192);
+    const appleIcon=document.createElement('link'); appleIcon.rel='apple-touch-icon'; appleIcon.href=icon192; document.head.appendChild(appleIcon);
+    const manifest={ name:'위치 마커 & 메모', short_name:'마커&메모', start_url:'.', scope:'.', display:'standalone', background_color:'#ffffff', theme_color:'#1e90ff', icons:[{src:icon192,sizes:'192x192',type:'image/png'},{src:icon512,sizes:'512x512',type:'image/png'}] };
+    const mblob=new Blob([JSON.stringify(manifest)],{type:'application/manifest+json'}); const mlink=document.createElement('link'); mlink.rel='manifest'; mlink.href=URL.createObjectURL(mblob); document.head.appendChild(mlink);
+    if('serviceWorker'in navigator){ const sw=`const CACHE='marker-memo-v3-single';const ASSETS=['./',location.pathname.endsWith('/')?location.pathname:location.pathname.split('/').slice(0,-1).join('/')+'/'];self.addEventListener('install',e=>{e.waitUntil((async()=>{const c=await caches.open(CACHE);try{await c.addAll(ASSETS);}catch(_){};self.skipWaiting();})())});self.addEventListener('activate',e=>{e.waitUntil((async()=>{const ks=await caches.keys();await Promise.all(ks.map(k=>{if(k!==CACHE)return caches.delete(k)}));await self.clients.claim();})())});self.addEventListener('fetch',e=>{const req=e.request;e.respondWith((async()=>{const c1=await caches.match(req);if(c1)return c1;try{const r=await fetch(req);const c=await caches.open(CACHE);if(req.method==='GET'&&new URL(req.url).origin===location.origin)c.put(req,r.clone());return r}catch(err){if(req.mode==='navigate'){const root=await caches.match('./');if(root)return root;}throw err}})())});`; const swBlob=new Blob([sw],{type:'text/javascript'}); const swUrl=URL.createObjectURL(swBlob); navigator.serviceWorker.register(swUrl).catch(console.warn); }
+    try{ const k='a2hs_hint_shown_v1'; if(!localStorage.getItem(k)&&/iPad|iPhone|iPod/.test(navigator.userAgent)){ showWarn('<b>팁</b> 홈 화면에 추가하려면 Safari 공유 버튼 → "홈 화면에 추가"를 탭하세요.'); localStorage.setItem(k,'1'); } }catch(_){ }
+  })();
+  </script>
+</body>
+</html>
